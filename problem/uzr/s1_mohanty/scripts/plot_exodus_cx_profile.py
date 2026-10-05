@@ -1,17 +1,16 @@
 """
 从 MOOSE Exodus (.e) 提取多时刻位置–成分剖面 c(x)，右轴叠加温度 T(x)。
 
-在算例目录下于 Python 环境中运行（输出保存在当前工作目录）:
-    import runpy
-    runpy.run_path("plot_exodus_cx_profile.py")
-
-或:
-    %run plot_exodus_cx_profile.py
+用法（须指定输入 .e；PNG 写在该 .e 所在目录）:
+    python plot_exodus_cx_profile.py s1_mohanty_out.e
+    python plot_exodus_cx_profile.py /path/to/case_out.e
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -21,10 +20,6 @@ from scipy.io import netcdf_file
 # =============================================================================
 # 用户可调参数
 # =============================================================================
-
-# --- Exodus 输入 ---
-# 相对当前工作目录；None = 自动选取 cwd 下最新的 *.e
-EXODUS_FILE: str | None = None
 
 # --- 时间采样 ---
 # TARGET_TIMES 的数值单位，由 TIME_UNIT 指定（见下）
@@ -67,11 +62,10 @@ T_YMAX: float | None = None
 SHOW_TEMPERATURE: bool = True
 TEMPERATURE_TIME: float | None = None  # None = TARGET_TIMES 最后一项；单位同 TIME_UNIT
 
-# --- 输出文件名（保存在当前工作目录，不建子目录）---
-# None = 使用当前工作目录文件夹名，如 s1_mohanty → s1_mohanty.png
+# --- 输出文件名（与输入 .e 同目录）---
+# None = 由输入 .e 文件名推导（去掉 .e，并去掉末尾 _out，如 s1_mohanty_out.e → s1_mohanty.png）
 OUTPUT_BASENAME: str | None = None
 SAVE_PNG: bool = True
-SAVE_PDF: bool = False
 
 # --- 作图样式（matplotlib 默认）---
 FIG_WIDTH_INCH: float = 8.0
@@ -91,6 +85,37 @@ def cwd() -> Path:
     return Path(os.getcwd()).resolve()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="从 Exodus (.e) 绘制多时刻 c(x) 剖面（右轴 T(x)）",
+    )
+    parser.add_argument(
+        "exodus",
+        type=str,
+        help="输入 Exodus 文件路径（相对当前目录或绝对路径），例如 s1_mohanty_out.e",
+    )
+    return parser.parse_args(argv)
+
+
+def resolve_exodus(exodus_arg: str) -> Path:
+    path = Path(exodus_arg).expanduser()
+    if not path.is_absolute():
+        path = cwd() / path
+    path = path.resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"未找到 Exodus 文件: {path}")
+    return path
+
+
+def output_basename(exodus_path: Path) -> str:
+    if OUTPUT_BASENAME:
+        return OUTPUT_BASENAME
+    stem = exodus_path.stem
+    if stem.endswith("_out"):
+        stem = stem[: -len("_out")]
+    return stem
+
+
 def target_to_seconds(value: float) -> float:
     unit = TIME_UNIT.lower()
     if unit == "day":
@@ -104,27 +129,6 @@ def seconds_to_display(value_sec: float) -> tuple[float, str]:
     if TIME_UNIT.lower() == "day":
         return value_sec / SECONDS_PER_DAY, "d"
     return value_sec, "s"
-
-
-def resolve_exodus(work_dir: Path) -> Path:
-    if EXODUS_FILE:
-        path = work_dir / EXODUS_FILE
-        if not path.is_file():
-            raise FileNotFoundError(f"未找到 Exodus 文件: {path}")
-        return path
-
-    candidates = sorted(work_dir.glob("*.e"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not candidates:
-        raise FileNotFoundError(f"在 {work_dir} 下未找到 *.e，请设置 EXODUS_FILE")
-    if len(candidates) > 1:
-        print(f"[info] 多个 .e 文件，使用最新: {candidates[0].name}")
-    return candidates[0]
-
-
-def output_basename(work_dir: Path) -> str:
-    if OUTPUT_BASENAME:
-        return OUTPUT_BASENAME
-    return work_dir.name
 
 
 def read_exodus(path: Path):
@@ -244,20 +248,16 @@ def plot_profiles(
         p = out_base.with_suffix(".png")
         fig.savefig(p, dpi=SAVE_DPI, bbox_inches="tight")
         saved.append(p)
-    if SAVE_PDF:
-        p = out_base.with_suffix(".pdf")
-        fig.savefig(p, bbox_inches="tight")
-        saved.append(p)
     plt.close(fig)
     return saved
 
 
-def main() -> None:
-    work_dir = cwd()
-    print(f"[info] cwd: {work_dir}")
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    print(f"[info] cwd: {cwd()}")
 
-    exodus_path = resolve_exodus(work_dir)
-    print(f"[info] exodus: {exodus_path.name}")
+    exodus_path = resolve_exodus(args.exodus)
+    print(f"[info] exodus: {exodus_path}")
 
     t_sec, x_raw, c_all, T_all = read_exodus(exodus_path)
 
@@ -281,16 +281,21 @@ def main() -> None:
         T_x, T_prof = mask_position(x_raw, T_all[idx_t])
         print(f"[info] T(x) from t={actual_t:.6f} {TIME_UNIT}")
 
-    out_base = work_dir / output_basename(work_dir)
+    # 输出写在输入 .e 同目录，避免因启动目录不同而找不到图
+    out_base = exodus_path.parent / output_basename(exodus_path)
     assert x_plot is not None
     saved = plot_profiles(x_plot, profiles, T_x, T_prof, out_base)
 
     if not saved:
-        print("[warn] 未保存图片（SAVE_PNG 与 SAVE_PDF 均为 False）")
+        print("[warn] 未保存图片（SAVE_PNG = False）")
     else:
         for p in saved:
-            print(f"[ok] {p.name}")
+            print(f"[ok] {p}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FileNotFoundError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        sys.exit(1)

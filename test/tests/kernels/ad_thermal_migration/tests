@@ -1,0 +1,58 @@
+[Tests]
+  design = 'ADThermalMigration.md'
+  issues = '#1'
+
+  [steady_exact]
+    type = 'CSVDiff'
+    input = 'steady_exact.i'
+    csvdiff = 'steady_exact_out.csv'
+    abs_zero = 1e-10
+    rel_err = 1e-6
+    requirement = 'With constant thermal mobility and a prescribed linear temperature field, '
+                  'ADThermalMigration shall reproduce the exact Soret steady state '
+                  'c = c0 + (M_T/D) ln(T/T0) to discretisation accuracy.'
+  []
+  [reversed_gradient]
+    type = 'CSVDiff'
+    input = 'steady_exact.i'
+    cli_args = "AuxKernels/T_aux/function='1500-500*x' "
+               "Functions/c_exact/expression='1+0.5*log((1500-500*x)/1500)' "
+               "Outputs/file_base=reversed_gradient_out"
+    csvdiff = 'reversed_gradient_out.csv'
+    abs_zero = 1e-10
+    rel_err = 1e-6
+    requirement = 'Reversing the temperature gradient shall reverse the direction of thermal '
+                  'migration (c decreases instead of increases along x).'
+  []
+  [jacobian]
+    type = 'PetscJacobianTester'
+    input = 'jacobian.i'
+    run_sim = true
+    ratio_tol = 1e-7
+    difference_tol = 1e-6
+    requirement = 'The automatic-differentiation Jacobian of ADThermalMigration shall be exact '
+                  'for a thermal mobility depending on both concentration and temperature.'
+  []
+  [soret_equivalence_ad]
+    type = 'CSVDiff'
+    input = 'soret_equivalence.i'
+    csvdiff = 'soret_equivalence_out.csv'
+    abs_zero = 1e-10
+    rel_err = 1e-7
+    requirement = 'ADThermalMigration in the split Cahn-Hilliard system shall produce the '
+                  'reference transient (gold file).'
+  []
+  [soret_equivalence_builtin]
+    type = 'CSVDiff'
+    input = 'soret_equivalence.i'
+    cli_args = "Kernels/active='c_dot w_res w_res_soret c_res' "
+               "Outputs/file_base=soret_equivalence_out"
+    csvdiff = 'soret_equivalence_out.csv'
+    abs_zero = 1e-10
+    rel_err = 1e-7
+    prereq = soret_equivalence_ad
+    requirement = 'The built-in SoretDiffusion kernel with D_soret = M kB T / c and '
+                  'Qeff = -M_T/M shall reproduce the same transient as ADThermalMigration '
+                  'to solver tolerance.'
+  []
+[]
